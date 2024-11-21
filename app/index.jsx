@@ -1,179 +1,84 @@
-import * as React from "react";
-import { View, StyleSheet, Text } from "react-native";
-import MapView, { Polygon } from "react-native-maps";
-import { useRef, useState, useEffect } from "react";
-import { db } from "../firebase-config";
-import { ref, get, child, set } from "firebase/database";
-import { useRouter } from "expo-router";
-import { useLocalidad } from "../Context/LocalidadesContext";
-import * as Location from "expo-location";
+import React, { useState } from "react";
+import { View, Image, ScrollView, TouchableOpacity, TextInput, Text, StyleSheet } from "react-native";
+import { BlurView } from "expo-blur";
+import { useNavigation, CommonActions } from "@react-navigation/native";
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword } from "firebase/auth";
+import { initializeApp } from "firebase/app";
+import { firebaseConfig } from "../firebase-config";
+
+const uri = "https://img.freepik.com/free-photo/futuristic-metaverse-empty-room-product-display-presentation-abstract-technology-scifi-with-neon-light-3d-background_56104-2314.jpg?t=st=1729570804~exp=1729574404~hmac=80d623c0d325909a8ec098b65d7479fa0bf332b335e8e5c07dcfb62e13985113&w=1380";
+const profilePicture = "https://img.freepik.com/free-psd/3d-illustration-person-with-sunglasses_23-2149436188.jpg?t=st=1729570653~exp=1729574253~hmac=2fe296113c3fe861e651890e89a2def21268848476945d928a109185fd6cb05b&w=740";
 
 function Index() {
-  const mapRef = useRef(null);
-  const [localidades, setLocalidades] = useState([]);
-  const [polygonColors, setPolygonColors] = useState({});
-  const [latitude, setLatitude] = useState(null);
-  const [longitude, setLongitude] = useState(null);
-  const router = useRouter();
-  const { setLocalidad } = useLocalidad();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const navigation = useNavigation();
 
-  useEffect(() => {
-    (async () => {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        console.log("Permission to access location was denied");
-        return;
-      }
+  const app = initializeApp(firebaseConfig);
+  const auth = getAuth(app);
 
-      let location = await Location.getCurrentPositionAsync({});
-      console.log("Ubicación obtenida: ", location);
-      setLatitude(location.coords.latitude);
-      setLongitude(location.coords.longitude);
-    })();
-  }, []);
-
-  useEffect(() => {
-    console.log("user location: ", latitude, longitude);
-  }, [latitude, longitude]);
-
-  useEffect(() => {
-    fetch(
-      "https://bogota-laburbano.opendatasoft.com/api/explore/v2.1/catalog/datasets/poligonos-localidades/records?limit=20"
-    )
-      .then((response) => response.json())
-      .then((data) => {
-        console.log(data);
-        if (data.results) {
-          const features = data.results
-            .map((feature) => {
-              if (
-                feature.geometry &&
-                feature.geometry.geometry &&
-                feature.geometry.geometry.coordinates
-              ) {
-                return {
-                  coordinates: feature.geometry.geometry.coordinates[0][0].map(
-                    (coord) => ({
-                      latitude: coord[1],
-                      longitude: coord[0],
-                    })
-                  ),
-                  name: feature["Nombre de la localidad"],
-                };
-              } else {
-                console.error("Invalid feature geometry", feature);
-                return null;
-              }
-            })
-            .filter((feature) => feature !== null);
-          setLocalidades(features);
-        } else {
-          console.error("No results found in the response");
-        }
+  const createAccount = () => {
+    createUserWithEmailAndPassword(auth, email, password)
+      .then((userCredential) => {
+        console.log("Account created");
+        const user = userCredential.user;
+        console.log(user);
       })
-      .catch((error) => console.error(error));
-  }, []);
+      .catch((error) => {
+        console.log(error);
+        alert(error.message);
+      });
+  };
 
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      for (const localidad of localidades) {
-        const localidadRef = ref(db, "localidades/" + localidad.name);
-        const snapshot = await get(child(localidadRef, "incidentes"));
-        let incidentes = 0;
-        if (snapshot.exists()) {
-          incidentes = snapshot.val();
-        }
-        // Obtener los reportes de la localidad
-        const reportesSnapshot = await get(
-          ref(db, "reportes/" + localidad.name)
+  const login = () => {
+    signInWithEmailAndPassword(auth, email, password)
+      .then((userCredential) => {
+        console.log("Logged in");
+        const user = userCredential.user;
+        console.log(user);
+
+        // Log current navigation state
+        const currentState = navigation.getState();
+        console.log("Current Navigation State:", currentState);
+
+        navigation.dispatch(
+          CommonActions.reset({
+            index: 0,
+            routes: [{ name: "(tabs)" }],
+          })
         );
-        if (reportesSnapshot.exists()) {
-          const reportes = reportesSnapshot.val();
-          const now = new Date();
-          for (const reporteId in reportes) {
-            const reporte = reportes[reporteId];
-            const reporteDate = new Date(reporte.date);
-            const timeDifference = now - reporteDate;
-            const daysDifference = timeDifference / (1000 * 3600 * 24);
-            if (daysDifference > 1) {
-              // Si ha pasado más de un día, decrementar el contador de incidentes
-              incidentes -= 1;
-              // Eliminar el reporte de la base de datos
-              await set(
-                ref(db, "reportes/" + localidad.name + "/" + reporteId),
-                null
-              );
-            }
-          }
-        }
-
-        let fillColor;
-        let strokeColor;
-        if (incidentes <= 3) {
-          fillColor = "#A1EEBD80"; // Verde
-          strokeColor = "#1F452980";
-        } else if (incidentes <= 5) {
-          fillColor = "#FCF59680"; // Amarillo
-          strokeColor = "#FBD288";
-        } else if (incidentes <= 7) {
-          fillColor = "#DE8F5F80"; // Naranja
-          strokeColor = "#FA812F";
-        } else {
-          fillColor = "#F9545480"; // Rojo
-          strokeColor = "#8B0000";
-        }
-
-        setPolygonColors((prevColors) => ({
-          ...prevColors,
-          [localidad.name]: { fillColor, strokeColor },
-        }));
-
-        // Actualizar el contador de incidentes en la base de datos
-        await set(localidadRef, {
-          incidentes: incidentes,
-        });
-      }
-    }, 100);
-
-    return () => clearInterval(interval);
-  }, [localidades]);
-
-  const handlePress = (name) => {
-    setLocalidad(name);
-    router.push("/Report");
+      })
+      .catch((error) => {
+        console.log(error);
+        alert(error.message);
+      });
   };
 
   return (
     <View style={styles.container}>
-      {latitude && longitude ? (
-        <MapView
-          ref={mapRef}
-          style={styles.map}
-          initialRegion={{
-            latitude: parseFloat(latitude),
-            longitude: parseFloat(longitude),
-            latitudeDelta: 0.1,
-            longitudeDelta: 0.1,
-          }}
-        >
-          {localidades.map((localidad, index) => (
-            <Polygon
-              key={index}
-              coordinates={localidad.coordinates}
-              strokeColor={
-                polygonColors[localidad.name]?.strokeColor || "#347928"
-              }
-              fillColor={polygonColors[localidad.name]?.fillColor || "#B1D69050"}
-              strokeWidth={2}
-              onPress={() => handlePress(localidad.name)}
-            />
-          ))}
-        </MapView>
-      ) : (
-        <View>
-          <Text>Cargando ubicación...</Text>
-        </View>
-      )}
+      <Image source={{ uri }} style={[styles.image, StyleSheet.absoluteFill]} />
+      <View style={{ width: 100, height: 100, backgroundColor: "purple", position: "absolute" }}></View>
+      <ScrollView contentContainerStyle={{ flex: 1, width: "100%", height: "100%", alignItems: "center", justifyContent: "center" }}>
+        <BlurView intensity={100}>
+          <View style={styles.login}>
+            <Image source={{ uri: profilePicture }} style={styles.profilePicture} />
+            <View>
+              <Text style={{ fontSize: 17, fontWeight: "400", color: "white" }}>E-mail</Text>
+              <TextInput onChangeText={(text) => setEmail(text)} style={styles.input} placeholder="Example@mail.com" />
+            </View>
+            <View>
+              <Text style={{ fontSize: 17, fontWeight: "400", color: "white" }}>Password</Text>
+              <TextInput onChangeText={(text) => setPassword(text)} style={styles.input} placeholder="Password" secureTextEntry={true} />
+            </View>
+            <TouchableOpacity onPress={login} style={[styles.button, { backgroundColor: "#18016190" }]}>
+              <Text style={{ color: "white", fontSize: 17, fontWeight: "400" }}>Login</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={createAccount} style={[styles.button, { backgroundColor: "#1F254490" }]}>
+              <Text style={{ color: "white", fontSize: 17, fontWeight: "400" }}>Create Account</Text>
+            </TouchableOpacity>
+          </View>
+        </BlurView>
+      </ScrollView>
     </View>
   );
 }
@@ -185,9 +90,49 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  map: {
+  image: {
     width: "100%",
     height: "100%",
+    resizeMode: "cover",
+  },
+  login: {
+    width: 350,
+    height: 500,
+    borderColor: "white",
+    borderWidth: 2,
+    borderRadius: 10,
+    padding: 10,
+    alignItems: "center",
+  },
+  profilePicture: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    borderColor: "#fff",
+    borderWidth: 1,
+    marginVertical: 30,
+  },
+  input: {
+    width: 250,
+    height: 40,
+    backgroundColor: "white",
+    borderWidth: 2,
+    borderColor: "#fff",
+    borderRadius: 10,
+    marginVertical: 10,
+    padding: 10,
+    backgroundColor: "#ffffff90",
+    marginBottom: 20,
+  },
+  button: {
+    width: 250,
+    height: 40,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    marginVertical: 10,
+    borderColor: "#ffffff90",
+    borderWidth: 1,
   },
 });
 
